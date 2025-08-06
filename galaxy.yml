@@ -1,0 +1,28 @@
+---
+# See https://docs.ansible.com/ansible/latest/dev_guide/collections_galaxy_meta.html
+
+namespace: community
+name: zte
+version: 0.1.0
+readme: README.md
+authors:
+  - Raylan (github.com/jraylan)
+dependencies:
+  "ansible.netcommon": ">=6.1.0"
+description: Modules and plugins for ZTE devices
+license:
+  - GPL-3.0-or-later
+tags:
+# tags so people can search for collections https://galaxy.ansible.com/search
+# tags are all lower-case, no spaces, no dashes.
+  - network
+  - zte
+  - olt
+repository: https://github.com/jraylan/community.zte
+#documentation: https://github.com/ansible-collection-migration/community.zte/tree/main/docs
+homepage: https://github.com/jraylan/community.zte
+issues: https://github.com/jraylan/community.zte/issues
+build_ignore:
+# https://docs.ansible.com/ansible/devel/dev_guide/developing_collections_distributing.html#ignoring-files-and-folders
+  - .gitignore
+  - changelogs/.plugin-cache.yaml
