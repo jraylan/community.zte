@@ -21,17 +21,118 @@ from __future__ import absolute_import, division, print_function
 
 __metaclass__ = type
 
-import json
 import re
+import time
+import threading
 
-from ansible.errors import AnsibleConnectionFailure
-from ansible.module_utils._text import to_bytes, to_text
 from ansible.utils.display import Display
 from ansible_collections.ansible.netcommon.plugins\
                         .plugin_utils.terminal_base import TerminalBase
 
 
 display = Display()
+
+
+class BufferStallMonitor:
+    """
+    Monitor for detecting stalled output buffers on devices that pause
+    output even with paging disabled. Sends Enter (CRLF) to resume
+    outputwhen no new data is received within the stall timeout.
+    """
+
+    def __init__(self, connection, stall_timeout=2.0, check_interval=0.5):
+        """
+        Initialize the buffer stall monitor.
+
+        :param connection: The connection object with _ssh_shell
+                           attribute.
+        :param stall_timeout: Seconds to wait before sending Enter
+        :param check_interval: Seconds between stall checks
+        """
+        self._connection = connection
+        self._stall_timeout = stall_timeout
+        self._check_interval = check_interval
+        self._last_data_time = None
+        self._last_data_len = 0
+        self._stop_event = threading.Event()
+        self._monitor_thread = None
+        self._lock = threading.Lock()
+        self._active = False
+        self._send_count = 0
+
+    def _monitor_loop(self):
+        """Background thread that monitors for stalled output."""
+        display.vvvv("OLT terminal: Stall monitor started")
+        while not self._stop_event.is_set():
+            with self._lock:
+                if not self._active:
+                    break
+
+                if self._last_data_time is not None:
+                    elapsed = time.time() - self._last_data_time
+                    if elapsed >= self._stall_timeout:
+                        # Output has stalled, send Enter to resume
+                        try:
+                            ssh_shell = getattr(
+                                self._connection, "_ssh_shell", None
+                            )
+                            if ssh_shell is not None:
+                                self._send_count += 1
+                                display.vvvv(
+                                    "OLT terminal: Output stalled for "
+                                    "%.1fs, sending Enter #%d to resume"
+                                    % (elapsed, self._send_count)
+                                )
+                                ssh_shell.sendall(b"\r\n")
+                                # Reset timer after sending
+                                self._last_data_time = time.time()
+                        except Exception as e:
+                            display.vvvv(
+                                "OLT terminal: Error sending Enter: %s"
+                                % str(e)
+                            )
+
+            self._stop_event.wait(self._check_interval)
+        display.vvvv(
+            "OLT terminal: Stall monitor stopped (sent %d enters)"
+            % self._send_count
+        )
+
+    def start(self):
+        """Start monitoring for stalled output."""
+        with self._lock:
+            self._active = True
+            self._last_data_time = time.time()
+            self._last_data_len = 0
+            self._send_count = 0
+            self._stop_event.clear()
+
+        self._monitor_thread = threading.Thread(
+            target=self._monitor_loop, daemon=True
+        )
+        self._monitor_thread.start()
+
+    def stop(self):
+        """Stop monitoring."""
+        with self._lock:
+            self._active = False
+        self._stop_event.set()
+        if self._monitor_thread is not None:
+            self._monitor_thread.join(timeout=1.0)
+            self._monitor_thread = None
+
+    def update(self, data_len=None):
+        """
+        Update the monitor when new data is received.
+
+        :param data_len: Current total length of received data
+        """
+        with self._lock:
+            if data_len is not None and data_len != self._last_data_len:
+                self._last_data_time = time.time()
+                self._last_data_len = data_len
+            elif data_len is None:
+                self._last_data_time = time.time()
 
 
 class TerminalModule(TerminalBase):
@@ -56,44 +157,11 @@ class TerminalModule(TerminalBase):
             rb"^\%\s+([^\r\n]+)([\r\n]+)",
             re.M
         ),
-        # Pre-timeout warning
-        # re.compile(
-        #     rb"^([\r\n])+\s+"
-        #     rb"Please check whether system data has been changed, and save "
-        #     rb"data in time([\r\n]$)+",
-        #     re.M
-        # ),
-        # Timeout
+        # Login timeout
         re.compile(
             rb"^\s+Configuration console time out, please retry to log on$",
             re.M
         ),
-        # Saving alert
-        # re.compile(
-        #     rb"^\s+It will take several minutes to save configuration file, "
-        #     rb"please wait...$",
-        #     re.M
-        # ),
-        # Saving success
-        # re.compile(
-        #     rb"^\s+ Configuration file had been saved successfully([\n\r]+)$",
-        #     re.M
-        # ),
-        # Logging/Warnings
-        # re.compile(
-        #     rb"^\s+(\d+\s+\[[0-9\-\:\s\+Z]{19,}\]|Warning):(.*[\n\r]?)*?$",
-        #     re.M
-        # ),
-        # re.compile(
-        #     rb"---- More ( Press 'Q' to break ) ----",
-        #     re.M
-        # ),
-        # re.compile(
-        #     rb"^\s+It will take a long time if the content you search is "
-        #     rb"too much or the string you input is too long, "
-        #     rb"you can press CTRL_C to break\s+$[\n\r]",
-        #     re.M
-        # )
     ]
 
     terminal_initial_prompt = [
@@ -103,14 +171,54 @@ class TerminalModule(TerminalBase):
     terminal_config_prompt = re.compile(
         rb"[\r\n]?^[\w\+\-\.:\/\[\]]+(?:\(config+\))?(?:[>#]) ?$")
 
+    # Stall detection settings for OLT devices that pause output
+    # even with paging disabled
+    STALL_TIMEOUT = 3.0  # Seconds to wait before considering output stalled
+    STALL_CHECK_INTERVAL = 0.5  # Seconds between stall checks
+
+    def __init__(self, connection):
+        super(TerminalModule, self).__init__(connection)
+        self._stall_monitor = None
+
     def _exec_cli_command(self, cmd, check_rc=True):
         """
         Executes the CLI command on the remote device and returns
-        the output
+        the output.
+
+        This implementation includes stall detection for OLT devices
+        that pause output even with paging disabled. If the output
+        stalls for more than STALL_TIMEOUT seconds, an Enter (CRLF)
+        is automatically sent to resume output.
 
         :arg cmd: Byte string command to be executed
+        :arg check_rc: Check return code (unused, kept for
+        compatibility)
         """
-        result = self._connection.exec_command(cmd)
+        # Start stall monitor before executing command
+        self._stall_monitor = BufferStallMonitor(
+            self._connection,
+            stall_timeout=self.STALL_TIMEOUT,
+            check_interval=self.STALL_CHECK_INTERVAL,
+        )
+        self._stall_monitor.start()
+
+        try:
+            result = self._connection.exec_command(cmd)
+        finally:
+            # Always stop the monitor when command completes
+            if self._stall_monitor is not None:
+                self._stall_monitor.stop()
+                self._stall_monitor = None
+
+        # Handle different return types from exec_command
+        # network_cli returns bytes/str directly when _ssh_shell is active
+        # Other connections may return (rc, stdout, stderr) tuple
+        if isinstance(result, tuple):
+            # Extract stdout from tuple (rc, stdout, stderr)
+            if len(result) >= 2:
+                result = result[1]
+            else:
+                result = b""
 
         if isinstance(result, memoryview):
             result = result.tobytes()
@@ -130,58 +238,7 @@ class TerminalModule(TerminalBase):
         self._exec_cli_command(b"terminal length 0")
 
     def on_become(self, passwd=None):
-        # if (
-        #     self._get_prompt().endswith(b"#")
-        #     and self.get_privilege_level() == 15
-        # ):
-        #     return
-
-        # cmd = {"command": "enable"}
-        # if passwd:
-        #     # Note: python-3.5 cannot combine u"" and r"" together.  Thus make
-        #     # an r string and use to_text to ensure it's text on both py2
-        #     # and py3.
-        #     cmd["prompt"] = to_text(
-        #         r"[\r\n]?(?:.*)?[Pp]assword: ?$",
-        #         errors="surrogate_or_strict",
-        #     )
-        #     cmd["answer"] = passwd
-        #     cmd["prompt_retry_check"] = True  # type: ignore
-        # try:
-        #     self._exec_cli_command(
-        #         to_bytes(json.dumps(cmd), errors="surrogate_or_strict"),
-        #     )
-        #     prompt = self._get_prompt()
-        #     privilege_level = self.get_privilege_level()
-        # except AnsibleConnectionFailure as e:
-        #     prompt = self._get_prompt()
-        #     raise AnsibleConnectionFailure(
-        #         "failed to elevate privilege to enable mode, "
-        #         "at prompt [%s] with error: %s"
-        #         % (prompt, e.message),
-        #     )
-
-        # if (
-        #     prompt is None
-        #     or not prompt.endswith(b"#")
-        #     or privilege_level != 15
-        # ):
-        #     raise AnsibleConnectionFailure(
-        #         "failed to elevate privilege to enable mode, still at level "
-        #         "[%d] and prompt [%s]"
-        #         % (privilege_level, prompt),
-        #     )
         pass
 
     def on_unbecome(self):
-        # prompt = self._get_prompt()
-        # if prompt is None:
-        #     # if prompt is None most likely the terminal is hung up at a prompt
-        #     return
-
-        # if self.get_privilege_level() != 15:
-        #     return
-
-        # if prompt.endswith(b"#"):
-        #     self._exec_cli_command(b"disable")
         pass
