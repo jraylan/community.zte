@@ -174,7 +174,7 @@ class TerminalModule(TerminalBase):
 
     # Stall detection settings for OLT devices that pause output
     # even with paging disabled
-    STALL_TIMEOUT = 3.0  # Seconds to wait before considering output stalled
+    STALL_TIMEOUT = 60.0  # Seconds to wait before considering output stalled
     STALL_CHECK_INTERVAL = 0.5  # Seconds between stall checks
 
     def __init__(self, connection):
