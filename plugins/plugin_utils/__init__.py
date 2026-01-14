@@ -18,7 +18,15 @@ class BufferStallMonitor:
     If neither indicator changes within stall_timeout, sends Enter.
     """
 
-    def __init__(self, connection, stall_timeout=60.0, check_interval=5):
+    DEBUG = False
+
+    def __init__(
+        self,
+        connection,
+        stall_timeout=60.0,
+        check_interval=5,
+        debug=False,
+    ):
         self._connection = connection
         self._stall_timeout = stall_timeout
         self._check_interval = check_interval
@@ -35,6 +43,7 @@ class BufferStallMonitor:
             datetime.now().strftime("%H:%M:%S.%f")[:-3],
             os.getpid()
         )
+        self.DEBUG = debug
 
     def _log(self, msg):
         try:
@@ -49,9 +58,9 @@ class BufferStallMonitor:
             os.fsync(self._debug_file.fileno())
 
     def __enter__(self):
-        self._debug_file = open(
-            "/tmp/olt_stall_monitor.log", "a", buffering=1
-        )
+        if self.DEBUG:
+            self._debug_file = open(
+                "olt_stall_monitor.log", "a", buffering=1)
         self.start()
         return self
 

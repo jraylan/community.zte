@@ -107,6 +107,7 @@ class Cliconf(CliconfBase):
             self._connection,
             stall_timeout=self.STALL_TIMEOUT,
             check_interval=self.STALL_CHECK_INTERVAL,
+            debug=self.response_logging,
         ):
             return super(Cliconf, self).send_command(
                 command=command,
