@@ -40,7 +40,7 @@ class BufferStallMonitor:
     outputwhen no new data is received within the stall timeout.
     """
 
-    def __init__(self, connection, stall_timeout=2.0, check_interval=0.5):
+    def __init__(self, connection, stall_timeout=60.0, check_interval=5):
         """
         Initialize the buffer stall monitor.
 
@@ -175,7 +175,7 @@ class TerminalModule(TerminalBase):
     # Stall detection settings for OLT devices that pause output
     # even with paging disabled
     STALL_TIMEOUT = 60.0  # Seconds to wait before considering output stalled
-    STALL_CHECK_INTERVAL = 0.5  # Seconds between stall checks
+    STALL_CHECK_INTERVAL = 5  # Seconds between stall checks
 
     def __init__(self, connection):
         super(TerminalModule, self).__init__(connection)
