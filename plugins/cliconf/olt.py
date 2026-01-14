@@ -45,6 +45,7 @@ from ansible.module_utils.six import PY3
 from ansible.errors import AnsibleConnectionFailure
 from ansible.module_utils._text import to_text
 
+
 if PY3:
     from collections.abc import Mapping
 else:
@@ -57,6 +58,9 @@ from ansible_collections.ansible.netcommon\
     .plugins.module_utils.network.common.utils import to_list
 from ansible_collections.ansible.netcommon\
     .plugins.plugin_utils.cliconf_base import CliconfBase, enable_mode
+from ansible_collections.community.zte.plugins.plugin_utils import (  # type: ignore # noqa: E501
+    BufferStallMonitor,
+)
 
 
 class Cliconf(CliconfBase):
@@ -72,9 +76,48 @@ class Cliconf(CliconfBase):
         r'$'
     )
 
+    # Stall detection settings for OLT devices that pause output
+    # even with paging disabled
+    STALL_TIMEOUT = 60.0  # Seconds to wait before considering output stalled
+    STALL_CHECK_INTERVAL = 5  # Seconds between stall checks
+
     def __init__(self, *args, **kwargs):
         self._device_info = {}
         super(Cliconf, self).__init__(*args, **kwargs)
+
+    def send_command(
+        self,
+        command=None,
+        prompt=None,
+        answer=None,
+        sendonly=False,
+        newline=True,
+        prompt_retry_check=False,
+        check_all=False,
+        strip_prompt=True,
+    ):
+        """
+        Executes a command on the remote device with stall detection.
+
+        This override wraps the parent send_command with a
+        BufferStallMonitor to detect and recover from stalled output
+        on OLT devices that pause even with paging disabled.
+        """
+        with BufferStallMonitor(
+            self._connection,
+            stall_timeout=self.STALL_TIMEOUT,
+            check_interval=self.STALL_CHECK_INTERVAL,
+        ):
+            return super(Cliconf, self).send_command(
+                command=command,
+                prompt=prompt,
+                answer=answer,
+                sendonly=sendonly,
+                newline=newline,
+                prompt_retry_check=prompt_retry_check,
+                check_all=check_all,
+                strip_prompt=strip_prompt,
+            )
 
     @enable_mode
     def get_config(self, source="running", flags=None, format=None):
@@ -291,7 +334,7 @@ class Cliconf(CliconfBase):
                         'serial_number')
                 except IndexError:
                     pass
-                
+
                 try:
                     device_info['network_os_serial'] = _matched.group(
                         'serial_number')
