@@ -78,8 +78,8 @@ class Cliconf(CliconfBase):
 
     # Stall detection settings for OLT devices that pause output
     # even with paging disabled
-    STALL_TIMEOUT = 10.0  # Seconds to wait before considering output stalled
-    STALL_CHECK_INTERVAL = 3  # Seconds between stall checks
+    STALL_TIMEOUT = 5.0  # Seconds to wait before considering output stalled
+    STALL_CHECK_INTERVAL = 1  # Seconds between stall checks
 
     def __init__(self, *args, **kwargs):
         self._device_info = {}
