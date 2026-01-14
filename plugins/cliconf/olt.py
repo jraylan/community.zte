@@ -48,9 +48,14 @@ from ansible.module_utils._text import to_text
 
 if PY3:
     from collections.abc import Mapping
+    try:
+        from typing import TYPE_CHECKING
+    except ImportError:
+        TYPE_CHECKING = False
 else:
     from ansible.module_utils.common\
         ._collections_compat import Mapping  # type: ignore
+    TYPE_CHECKING = False
 
 from ansible_collections.ansible.netcommon\
     .plugins.module_utils.network.common.config import NetworkConfig, dumps
@@ -58,9 +63,14 @@ from ansible_collections.ansible.netcommon\
     .plugins.module_utils.network.common.utils import to_list
 from ansible_collections.ansible.netcommon\
     .plugins.plugin_utils.cliconf_base import CliconfBase, enable_mode
-from ansible_collections.community.zte.plugins.plugin_utils import (  # type: ignore # noqa: E501
-    BufferStallMonitor,
-)
+
+
+if TYPE_CHECKING:
+    from ..plugin_utils import BufferStallMonitor
+else:
+    from ansible_collections.community.zte.plugins.plugin_utils import (
+        BufferStallMonitor,
+    )
 
 
 class Cliconf(CliconfBase):
