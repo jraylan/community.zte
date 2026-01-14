@@ -153,8 +153,9 @@ class TerminalModule(TerminalBase):
         # Command error
         re.compile(
             rb"^(\{[^\}]+\}:$([\r\n]$)+^\s+Command:$\s+.*?$)?"
-            rb"(\s*[\^]([\r\n]+))?"
-            rb"^\%\s+([^\r\n]+)([\r\n]+)",
+            rb"(\s*[\^]([\r\n]+))?^\%"
+            rb"(?! The password is not strong, please change the password\.)"
+            rb"\s+([^\r\n]+)([\r\n]+)",
             re.M
         ),
         # Login timeout
